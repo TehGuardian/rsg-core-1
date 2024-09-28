@@ -592,29 +592,38 @@ function RSGCore.Player.ForceDeleteCharacter(citizenid)
 end
 
 -- Inventory Backwards Compatibility
-
+---@deprecated use exports['rsg-inventory']:SaveInventory
 function RSGCore.Player.SaveInventory(source)
     if GetResourceState('rsg-inventory') == 'missing' then return end
+    print('Use RSG-Inventory Export SaveInventory Instead')
     exports['rsg-inventory']:SaveInventory(source, false)
 end
 
+---@deprecated use exports['rsg-inventory']:SaveInventory
 function RSGCore.Player.SaveOfflineInventory(PlayerData)
     if GetResourceState('rsg-inventory') == 'missing' then return end
+    print('Use RSG-Inventory Export SaveInventory Instead')
     exports['rsg-inventory']:SaveInventory(PlayerData, true)
 end
 
+---@deprecated use exports['rsg-inventory']:GetTotalWeight
 function RSGCore.Player.GetTotalWeight(items)
     if GetResourceState('rsg-inventory') == 'missing' then return end
+    print('Use RSG-Inventory Export GetTotalWeight Instead')
     return exports['rsg-inventory']:GetTotalWeight(items)
 end
 
+---@deprecated use exports['rsg-inventory']:GetSlotsByItem
 function RSGCore.Player.GetSlotsByItem(items, itemName)
     if GetResourceState('rsg-inventory') == 'missing' then return end
+    print('Use RSG-Inventory Export GetSlotsByItem Instead')
     return exports['rsg-inventory']:GetSlotsByItem(items, itemName)
 end
 
+---@deprecated use exports['rsg-inventory']:GetFirstSlotByItem
 function RSGCore.Player.GetFirstSlotByItem(items, itemName)
     if GetResourceState('rsg-inventory') == 'missing' then return end
+    print('Use RSG-Inventory Export GetFirstSlotByItem Instead')
     return exports['rsg-inventory']:GetFirstSlotByItem(items, itemName)
 end
 

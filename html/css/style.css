@@ -27,7 +27,7 @@ html::-webkit-scrollbar {
         font-size: 1.5vh;
     }
 
-    .police {
+    .sheriff {
         background-color: rgba(23, 23, 23, 90%);
         border-radius: 10px;
         box-shadow: 0rem 0rem 0.1rem 0.05rem #000000;
@@ -35,7 +35,7 @@ html::-webkit-scrollbar {
         font-size: 1.5vh;
     }
 
-    .ambulance {
+    .doctor {
         background-color: rgba(23, 23, 23, 90%);
         border-radius: 10px;
         box-shadow: 0rem 0rem 0.1rem 0.05rem #000000;
@@ -68,13 +68,13 @@ html::-webkit-scrollbar {
     border: 1px solid #fe4255;
 }
 
-.police {
+.sheriff {
     background-color: #2197f2;
     border-radius: 5px;
     border: 1px solid #7ac1f7;
 }
 
-.ambulance {
+.doctor {
     background-color: #f44236;
     border-radius: 5px;
     border: 1px solid #f88e86;

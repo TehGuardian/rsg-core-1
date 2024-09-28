@@ -32,13 +32,13 @@ export const BrowserMockConfigData = {
       classes: "error",
       icon: "dangerous",
     },
-    police: {
-      classes: "police",
-      icon: "local_police",
+    sheriff: {
+      classes: "sheriff",
+      icon: "fas fa-building-shield",
     },
-    ambulance: {
-      classes: "ambulance",
-      icon: "fas fa-ambulance",
+    doctor: {
+      classes: "doctor",
+      icon: "fas fa-stethoscope",
     },
   },
 };

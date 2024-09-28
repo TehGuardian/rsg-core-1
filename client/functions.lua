@@ -20,6 +20,47 @@ function RSGCore.Debug(resource, obj, depth)
     TriggerServerEvent('RSGCore:DebugSomething', resource, obj, depth)
 end
 
+---@param pool string
+---@param ignoreList? integer[]
+---@return integer[]
+local function getEntities(pool, ignoreList) -- luacheck: ignore
+    ignoreList = ignoreList or {}
+    local ents = GetGamePool(pool)
+    local entities = {}
+    local ignoreMap = {}
+    for i = 1, #ignoreList do
+        ignoreMap[ignoreList[i]] = true
+    end
+
+    for i = 1, #ents do
+        local entity = ents[i]
+        if not ignoreMap[entity] then
+            entities[#entities + 1] = entity
+        end
+    end
+    return entities
+end
+
+---@param entities integer[]
+---@param coords vector3? if unset uses player coords
+---@return integer closestObj or -1
+---@return number closestDistance or -1
+local function getClosestEntity(entities, coords) -- luacheck: ignore
+    coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords or GetEntityCoords(cache.ped)
+    local closestDistance = -1
+    local closestEntity = -1
+    for i = 1, #entities do
+        local entity = entities[i]
+        local entityCoords = GetEntityCoords(entity)
+        local distance = #(entityCoords - coords)
+        if closestDistance == -1 or closestDistance > distance then
+            closestEntity = entity
+            closestDistance = distance
+        end
+    end
+    return closestEntity, closestDistance
+end
+
 -- Player
 
 function RSGCore.Functions.GetPlayerData(cb)
@@ -56,7 +97,7 @@ function RSGCore.Functions.LookAtEntity(entity, timeout, speed)
     end
     if speed > 5.0 then speed = 5.0 end
     if timeout > 5000 then timeout = 5000 end
-    local ped = PlayerPedId()
+    local ped = cache.ped
     local playerPos = GetEntityCoords(ped)
     local targetPos = GetEntityCoords(entity)
     local dx = targetPos.x - playerPos.x
@@ -89,49 +130,11 @@ function RSGCore.Functions.LookAtEntity(entity, timeout, speed)
 end
 
 -- Function to run an animation
---- @param animDic string: The name of the animation dictionary
---- @param animName string - The name of the animation within the dictionary
---- @param duration number - The duration of the animation in milliseconds. -1 will play the animation indefinitely
---- @param upperbodyOnly boolean - If true, the animation will only affect the upper body of the ped
---- @return number - The timestamp indicating when the animation concluded. For animations set to loop indefinitely, this will still return the maximum duration of the animation.
+---@deprecated use lib.requestAnimDict from ox_lib, and the TaskPlayAnim and RemoveAnimDict natives directly
 function RSGCore.Functions.PlayAnim(animDict, animName, upperbodyOnly, duration)
-    local invoked = GetInvokingResource()
-    local animPromise = promise.new()
-    if type(animDict) ~= 'string' or type(animName) ~= 'string' then
-        animPromise:reject(invoked .. ' :^1  Wrong type for animDict or animName')
-        return animPromise.value
-    end
-    if not DoesAnimDictExist(animDict) then
-        animPromise:reject(invoked .. ' :^1  Animation dictionary does not exist')
-        return animPromise.value
-    end
     local flags = upperbodyOnly and 16 or 0
     local runTime = duration or -1
-    if runTime == -1 then flags = 49 end
-    local ped = PlayerPedId()
-    local start = GetGameTimer()
-    while not HasAnimDictLoaded(animDict) do
-        RequestAnimDict(animDict)
-        if (GetGameTimer() - start) > 5000 then
-            animPromise:reject(invoked .. ' :^1  Animation dictionary failed to load')
-            return animPromise.value
-        end
-        Wait(1)
-    end
-    TaskPlayAnim(ped, animDict, animName, 8.0, 8.0, runTime, flags, 0, true, true, true)
-    Wait(10) -- Wait a bit for the animation to start, then check if it exists
-    local currentTime = GetAnimDuration(animDict, animName)
-    if currentTime == 0 then
-        animPromise:reject(invoked .. ' :^1  Animation does not exist')
-        return animPromise.value
-    end
-    local fullDuration = currentTime * 1000
-    -- If duration is provided and is less than the full duration, use it instead
-    local waitTime = duration and math.min(duration, fullDuration) or fullDuration
-    Wait(waitTime)
-    RemoveAnimDict(animDict)
-    animPromise:resolve(currentTime)
-    return animPromise.value
+    lib.playAnim(cache.ped, animDict, animName, 8.0, 3.0, runTime, flags, 0.0, false, false, true)
 end
 
 function RSGCore.Functions.IsWearingGloves()
@@ -173,29 +176,38 @@ function RSGCore.Functions.Notify(text, texttype, length, icon)
     SendNUIMessage(message)
 end
 
-function RSGCore.Functions.Progressbar(name, label, duration, useWhileDead, canCancel, disableControls, animation, prop, propTwo, onFinish, onCancel)
-    if GetResourceState('progressbar') ~= 'started' then error('progressbar needs to be started in order for RSGCore.Functions.Progressbar to work') end
-    exports['progressbar']:Progress({
-        name = name:lower(),
+---@deprecated use lib.progressBar from ox_lib
+function RSGCore.Functions.Progressbar(_, label, duration, useWhileDead, canCancel, disableControls, animation, prop, _, onFinish, onCancel)
+    if lib.progressBar({
         duration = duration,
         label = label,
         useWhileDead = useWhileDead,
         canCancel = canCancel,
-        controlDisables = disableControls,
-        animation = animation,
-        prop = prop,
-        propTwo = propTwo,
-    }, function(cancelled)
-        if not cancelled then
-            if onFinish then
-                onFinish()
-            end
-        else
-            if onCancel then
-                onCancel()
-            end
+        disable = {
+            move = disableControls?.disableMovement,
+            car = disableControls?.disableCarMovement,
+            combat = disableControls?.disableCombat,
+            mouse = disableControls?.disableMouse,
+        },
+        anim = {
+            dict = animation?.animDict,
+            clip = animation?.anim,
+            flags = animation?.flags
+        },
+        prop = {
+            model = prop?.model,
+            pos = prop?.coords,
+            rot = prop?.rotation,
+        },
+    }) then
+        if onFinish then
+            onFinish()
         end
-    end)
+    else
+        if onCancel then
+            onCancel()
+        end
+    end
 end
 
 -- World Getters
@@ -212,162 +224,67 @@ function RSGCore.Functions.GetPlayers()
     return GetActivePlayers()
 end
 
-function RSGCore.Functions.GetPlayersFromCoords(coords, distance)
-    local players = GetActivePlayers()
-    local ped = PlayerPedId()
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(ped)
+function RSGCore.Functions.GetPlayersFromCoords(coords, radius)
+    coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords or GetEntityCoords(cache.ped)
+    local players = lib.getNearbyPlayers(coords, radius or 5, true)
+
+    -- This is for backwards compatability as beforehand it only returned the PlayerId, where Lib returns PlayerPed, PlayerId and PlayerCoords
+    for i = 1, #players do
+        players[i] = players[i].id
     end
-    distance = distance or 5
-    local closePlayers = {}
-    for _, player in ipairs(players) do
-        local targetCoords = GetEntityCoords(GetPlayerPed(player))
-        local targetdistance = #(targetCoords - coords)
-        if targetdistance <= distance then
-            closePlayers[#closePlayers + 1] = player
-        end
-    end
-    return closePlayers
+
+    return players
 end
 
+---@deprecated use lib.getClosestPlayer from ox_lib
 function RSGCore.Functions.GetClosestPlayer(coords)
-    local ped = PlayerPedId()
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(ped)
-    end
-    local closestPlayers = RSGCore.Functions.GetPlayersFromCoords(coords)
-    local closestDistance = -1
-    local closestPlayer = -1
-    for i = 1, #closestPlayers, 1 do
-        if closestPlayers[i] ~= PlayerId() and closestPlayers[i] ~= -1 then
-            local pos = GetEntityCoords(GetPlayerPed(closestPlayers[i]))
-            local distance = #(pos - coords)
-
-            if closestDistance == -1 or closestDistance > distance then
-                closestPlayer = closestPlayers[i]
-                closestDistance = distance
-            end
-        end
-    end
-    return closestPlayer, closestDistance
+    coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords or GetEntityCoords(cache.ped)
+    local playerId, _, playerCoords = lib.getClosestPlayer(coords, 5, false)
+    local closestDistance = playerCoords and #(playerCoords - coords) or nil
+    return playerId or -1, closestDistance or -1
 end
 
 function RSGCore.Functions.GetPeds(ignoreList)
-    local pedPool = GetGamePool('CPed')
-    local peds = {}
-    local ignoreTable = {}
-    ignoreList = ignoreList or {}
-    for i = 1, #ignoreList do
-        ignoreTable[ignoreList[i]] = true
-    end
-    for i = 1, #pedPool do
-        if not ignoreTable[pedPool[i]] then
-            peds[#peds + 1] = pedPool[i]
-        end
-    end
-    return peds
+    return getEntities('CPed', ignoreList)
 end
 
 function RSGCore.Functions.GetClosestPed(coords, ignoreList)
-    local ped = PlayerPedId()
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(ped)
-    end
-    ignoreList = ignoreList or {}
-    local peds = RSGCore.Functions.GetPeds(ignoreList)
-    local closestDistance = -1
-    local closestPed = -1
-    for i = 1, #peds, 1 do
-        local pedCoords = GetEntityCoords(peds[i])
-        local distance = #(pedCoords - coords)
-
-        if closestDistance == -1 or closestDistance > distance then
-            closestPed = peds[i]
-            closestDistance = distance
-        end
-    end
-    return closestPed, closestDistance
+    return getClosestEntity(getEntities('CPed', ignoreList), coords)
 end
 
 function RSGCore.Functions.GetClosestVehicle(coords)
-    local ped = PlayerPedId()
-    local vehicles = GetGamePool('CVehicle')
-    local closestDistance = -1
-    local closestVehicle = -1
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(ped)
-    end
-    for i = 1, #vehicles, 1 do
-        local vehicleCoords = GetEntityCoords(vehicles[i])
-        local distance = #(vehicleCoords - coords)
-
-        if closestDistance == -1 or closestDistance > distance then
-            closestVehicle = vehicles[i]
-            closestDistance = distance
-        end
-    end
-    return closestVehicle, closestDistance
+    return getClosestEntity(GetGamePool('CVehicle'), coords)
 end
 
 function RSGCore.Functions.GetClosestObject(coords)
-    local ped = PlayerPedId()
-    local objects = GetGamePool('CObject')
-    local closestDistance = -1
-    local closestObject = -1
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(ped)
-    end
-    for i = 1, #objects, 1 do
-        local objectCoords = GetEntityCoords(objects[i])
-        local distance = #(objectCoords - coords)
-        if closestDistance == -1 or closestDistance > distance then
-            closestObject = objects[i]
-            closestDistance = distance
-        end
-    end
-    return closestObject, closestDistance
+    return getClosestEntity(GetGamePool('CObject'), coords)
 end
 
 -- Vehicle
+---@deprecated use lib.requestModel from ox_lib
+RSGCore.Functions.LoadModel = lib.requestModel
 
-function RSGCore.Functions.LoadModel(model)
-    if HasModelLoaded(model) then return end
-    RequestModel(model)
-    while not HasModelLoaded(model) do
-        Wait(0)
-    end
-end
-
+---@param model string|number
+---@param cb? fun(vehicle: number)
+---@param coords? vector4 player position if not specified
+---@param isnetworked? boolean defaults to true
+---@param teleportInto boolean teleport player to driver seat if true
 function RSGCore.Functions.SpawnVehicle(model, cb, coords, isnetworked, teleportInto)
-    local ped = PlayerPedId()
+    local playerCoords = GetEntityCoords(cache.ped)
+    local combinedCoords = vec4(playerCoords.x, playerCoords.y, playerCoords.z, GetEntityHeading(cache.ped))
+    coords = type(coords) == 'table' and vec4(coords.x, coords.y, coords.z, coords.w or combinedCoords.w) or coords or combinedCoords
     model = type(model) == 'string' and joaat(model) or model
     if not IsModelInCdimage(model) then return end
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(ped)
-    end
+
     isnetworked = isnetworked == nil or isnetworked
-    RSGCore.Functions.LoadModel(model)
+    lib.requestModel(model)
     local veh = CreateVehicle(model, coords.x, coords.y, coords.z, coords.w, isnetworked, false)
     local netid = NetworkGetNetworkIdFromEntity(veh)
     SetVehicleHasBeenOwnedByPlayer(veh, true)
     SetNetworkIdCanMigrate(netid, true)
-    SetVehicleNeedsToBeHotwired(veh, false)
-    SetVehRadioStation(veh, 'OFF')
     SetVehicleFuelLevel(veh, 100.0)
     SetModelAsNoLongerNeeded(model)
-    if teleportInto then TaskWarpPedIntoVehicle(PlayerPedId(), veh, -1) end
+    if teleportInto then TaskWarpPedIntoVehicle(cache.ped, veh, -1) end
     if cb then cb(veh) end
 end
 
@@ -409,11 +326,6 @@ function RSGCore.Functions.GetVehicleProperties(vehicle)
             end
         end
 
-        local modLivery = GetVehicleMod(vehicle, 48)
-        if GetVehicleMod(vehicle, 48) == -1 and GetVehicleLivery(vehicle) ~= 0 then
-            modLivery = GetVehicleLivery(vehicle)
-        end
-
         local tireHealth = {}
         for i = 0, 3 do
             tireHealth[i] = GetVehicleWheelHealth(vehicle, i)
@@ -437,14 +349,6 @@ function RSGCore.Functions.GetVehicleProperties(vehicle)
         local doorStatus = {}
         for i = 0, 5 do
             doorStatus[i] = IsVehicleDoorDamaged(vehicle, i) == 1
-        end
-
-        local xenonColor
-        local hasCustom, r, g, b = GetVehicleXenonLightsCustomColor(vehicle)
-        if hasCustom then
-            xenonColor = table.pack(r, g, b)
-        else
-            xenonColor = GetVehicleXenonLightsColor(vehicle)
         end
 
         return {
@@ -471,70 +375,7 @@ function RSGCore.Functions.GetVehicleProperties(vehicle)
             windowTint = GetVehicleWindowTint(vehicle),
             windowStatus = windowStatus,
             doorStatus = doorStatus,
-            neonEnabled = {
-                IsVehicleNeonLightEnabled(vehicle, 0),
-                IsVehicleNeonLightEnabled(vehicle, 1),
-                IsVehicleNeonLightEnabled(vehicle, 2),
-                IsVehicleNeonLightEnabled(vehicle, 3)
-            },
-            neonColor = table.pack(GetVehicleNeonLightsColour(vehicle)),
-            interiorColor = GetVehicleInteriorColour(vehicle),
             extras = extras,
-            tyreSmokeColor = table.pack(GetVehicleTyreSmokeColor(vehicle)),
-            xenonColor = xenonColor,
-            modSpoilers = GetVehicleMod(vehicle, 0),
-            modFrontBumper = GetVehicleMod(vehicle, 1),
-            modRearBumper = GetVehicleMod(vehicle, 2),
-            modSideSkirt = GetVehicleMod(vehicle, 3),
-            modExhaust = GetVehicleMod(vehicle, 4),
-            modFrame = GetVehicleMod(vehicle, 5),
-            modGrille = GetVehicleMod(vehicle, 6),
-            modHood = GetVehicleMod(vehicle, 7),
-            modFender = GetVehicleMod(vehicle, 8),
-            modRightFender = GetVehicleMod(vehicle, 9),
-            modRoof = GetVehicleMod(vehicle, 10),
-            modEngine = GetVehicleMod(vehicle, 11),
-            modBrakes = GetVehicleMod(vehicle, 12),
-            modTransmission = GetVehicleMod(vehicle, 13),
-            modHorns = GetVehicleMod(vehicle, 14),
-            modSuspension = GetVehicleMod(vehicle, 15),
-            modArmor = GetVehicleMod(vehicle, 16),
-            modKit17 = GetVehicleMod(vehicle, 17),
-            modTurbo = IsToggleModOn(vehicle, 18),
-            modKit19 = GetVehicleMod(vehicle, 19),
-            modSmokeEnabled = IsToggleModOn(vehicle, 20),
-            modKit21 = GetVehicleMod(vehicle, 21),
-            modXenon = IsToggleModOn(vehicle, 22),
-            modFrontWheels = GetVehicleMod(vehicle, 23),
-            modBackWheels = GetVehicleMod(vehicle, 24),
-            modCustomTiresF = GetVehicleModVariation(vehicle, 23),
-            modCustomTiresR = GetVehicleModVariation(vehicle, 24),
-            modPlateHolder = GetVehicleMod(vehicle, 25),
-            modVanityPlate = GetVehicleMod(vehicle, 26),
-            modTrimA = GetVehicleMod(vehicle, 27),
-            modOrnaments = GetVehicleMod(vehicle, 28),
-            modDashboard = GetVehicleMod(vehicle, 29),
-            modDial = GetVehicleMod(vehicle, 30),
-            modDoorSpeaker = GetVehicleMod(vehicle, 31),
-            modSeats = GetVehicleMod(vehicle, 32),
-            modSteeringWheel = GetVehicleMod(vehicle, 33),
-            modShifterLeavers = GetVehicleMod(vehicle, 34),
-            modAPlate = GetVehicleMod(vehicle, 35),
-            modSpeakers = GetVehicleMod(vehicle, 36),
-            modTrunk = GetVehicleMod(vehicle, 37),
-            modHydrolic = GetVehicleMod(vehicle, 38),
-            modEngineBlock = GetVehicleMod(vehicle, 39),
-            modAirFilter = GetVehicleMod(vehicle, 40),
-            modStruts = GetVehicleMod(vehicle, 41),
-            modArchCover = GetVehicleMod(vehicle, 42),
-            modAerials = GetVehicleMod(vehicle, 43),
-            modTrimB = GetVehicleMod(vehicle, 44),
-            modTank = GetVehicleMod(vehicle, 45),
-            modWindows = GetVehicleMod(vehicle, 46),
-            modKit47 = GetVehicleMod(vehicle, 47),
-            modLivery = modLivery,
-            modKit49 = GetVehicleMod(vehicle, 49),
-            liveryRoof = GetVehicleRoofLivery(vehicle),
         }
     else
         return
@@ -577,9 +418,6 @@ function RSGCore.Functions.SetVehicleProperties(vehicle, props)
         if props.dirtLevel then
             SetVehicleDirtLevel(vehicle, props.dirtLevel + 0.0)
         end
-        if props.oilLevel then
-            SetVehicleOilLevel(vehicle, props.oilLevel)
-        end
         if props.color1 then
             if type(props.color1) == 'number' then
                 ClearVehicleCustomPrimaryColour(vehicle)
@@ -595,18 +433,6 @@ function RSGCore.Functions.SetVehicleProperties(vehicle, props)
             else
                 SetVehicleCustomSecondaryColour(vehicle, props.color2[1], props.color2[2], props.color2[3])
             end
-        end
-        if props.pearlescentColor then
-            SetVehicleExtraColours(vehicle, props.pearlescentColor, wheelColor)
-        end
-        if props.interiorColor then
-            SetVehicleInteriorColor(vehicle, props.interiorColor)
-        end
-        if props.dashboardColor then
-            SetVehicleDashboardColour(vehicle, props.dashboardColor)
-        end
-        if props.wheelColor then
-            SetVehicleExtraColours(vehicle, props.pearlescentColor or pearlescentColor, props.wheelColor)
         end
         if props.wheels then
             SetVehicleWheelType(vehicle, props.wheels)
@@ -630,14 +456,6 @@ function RSGCore.Functions.SetVehicleProperties(vehicle, props)
                 end
             end
         end
-        if props.windowTint then
-            SetVehicleWindowTint(vehicle, props.windowTint)
-        end
-        if props.windowStatus then
-            for windowIndex, smashWindow in pairs(props.windowStatus) do
-                if not smashWindow then SmashVehicleWindow(vehicle, windowIndex) end
-            end
-        end
         if props.doorStatus then
             for doorIndex, breakDoor in pairs(props.doorStatus) do
                 if breakDoor then
@@ -645,193 +463,12 @@ function RSGCore.Functions.SetVehicleProperties(vehicle, props)
                 end
             end
         end
-        if props.neonEnabled then
-            SetVehicleNeonLightEnabled(vehicle, 0, props.neonEnabled[1])
-            SetVehicleNeonLightEnabled(vehicle, 1, props.neonEnabled[2])
-            SetVehicleNeonLightEnabled(vehicle, 2, props.neonEnabled[3])
-            SetVehicleNeonLightEnabled(vehicle, 3, props.neonEnabled[4])
-        end
-        if props.neonColor then
-            SetVehicleNeonLightsColour(vehicle, props.neonColor[1], props.neonColor[2], props.neonColor[3])
-        end
-        if props.interiorColor then
-            SetVehicleInteriorColour(vehicle, props.interiorColor)
-        end
+
         if props.wheelSize then
             SetVehicleWheelSize(vehicle, props.wheelSize)
         end
         if props.wheelWidth then
             SetVehicleWheelWidth(vehicle, props.wheelWidth)
-        end
-        if props.tyreSmokeColor then
-            SetVehicleTyreSmokeColor(vehicle, props.tyreSmokeColor[1], props.tyreSmokeColor[2], props.tyreSmokeColor[3])
-        end
-        if props.modSpoilers then
-            SetVehicleMod(vehicle, 0, props.modSpoilers, false)
-        end
-        if props.modFrontBumper then
-            SetVehicleMod(vehicle, 1, props.modFrontBumper, false)
-        end
-        if props.modRearBumper then
-            SetVehicleMod(vehicle, 2, props.modRearBumper, false)
-        end
-        if props.modSideSkirt then
-            SetVehicleMod(vehicle, 3, props.modSideSkirt, false)
-        end
-        if props.modExhaust then
-            SetVehicleMod(vehicle, 4, props.modExhaust, false)
-        end
-        if props.modFrame then
-            SetVehicleMod(vehicle, 5, props.modFrame, false)
-        end
-        if props.modGrille then
-            SetVehicleMod(vehicle, 6, props.modGrille, false)
-        end
-        if props.modHood then
-            SetVehicleMod(vehicle, 7, props.modHood, false)
-        end
-        if props.modFender then
-            SetVehicleMod(vehicle, 8, props.modFender, false)
-        end
-        if props.modRightFender then
-            SetVehicleMod(vehicle, 9, props.modRightFender, false)
-        end
-        if props.modRoof then
-            SetVehicleMod(vehicle, 10, props.modRoof, false)
-        end
-        if props.modEngine then
-            SetVehicleMod(vehicle, 11, props.modEngine, false)
-        end
-        if props.modBrakes then
-            SetVehicleMod(vehicle, 12, props.modBrakes, false)
-        end
-        if props.modTransmission then
-            SetVehicleMod(vehicle, 13, props.modTransmission, false)
-        end
-        if props.modHorns then
-            SetVehicleMod(vehicle, 14, props.modHorns, false)
-        end
-        if props.modSuspension then
-            SetVehicleMod(vehicle, 15, props.modSuspension, false)
-        end
-        if props.modArmor then
-            SetVehicleMod(vehicle, 16, props.modArmor, false)
-        end
-        if props.modKit17 then
-            SetVehicleMod(vehicle, 17, props.modKit17, false)
-        end
-        if props.modTurbo then
-            ToggleVehicleMod(vehicle, 18, props.modTurbo)
-        end
-        if props.modKit19 then
-            SetVehicleMod(vehicle, 19, props.modKit19, false)
-        end
-        if props.modSmokeEnabled then
-            ToggleVehicleMod(vehicle, 20, props.modSmokeEnabled)
-        end
-        if props.modKit21 then
-            SetVehicleMod(vehicle, 21, props.modKit21, false)
-        end
-        if props.modXenon then
-            ToggleVehicleMod(vehicle, 22, props.modXenon)
-        end
-        if props.xenonColor then
-            if type(props.xenonColor) == 'table' then
-                SetVehicleXenonLightsCustomColor(vehicle, props.xenonColor[1], props.xenonColor[2], props.xenonColor[3])
-            else
-                SetVehicleXenonLightsColor(vehicle, props.xenonColor)
-            end
-        end
-        if props.modFrontWheels then
-            SetVehicleMod(vehicle, 23, props.modFrontWheels, false)
-        end
-        if props.modBackWheels then
-            SetVehicleMod(vehicle, 24, props.modBackWheels, false)
-        end
-        if props.modCustomTiresF then
-            SetVehicleMod(vehicle, 23, props.modFrontWheels, props.modCustomTiresF)
-        end
-        if props.modCustomTiresR then
-            SetVehicleMod(vehicle, 24, props.modBackWheels, props.modCustomTiresR)
-        end
-        if props.modPlateHolder then
-            SetVehicleMod(vehicle, 25, props.modPlateHolder, false)
-        end
-        if props.modVanityPlate then
-            SetVehicleMod(vehicle, 26, props.modVanityPlate, false)
-        end
-        if props.modTrimA then
-            SetVehicleMod(vehicle, 27, props.modTrimA, false)
-        end
-        if props.modOrnaments then
-            SetVehicleMod(vehicle, 28, props.modOrnaments, false)
-        end
-        if props.modDashboard then
-            SetVehicleMod(vehicle, 29, props.modDashboard, false)
-        end
-        if props.modDial then
-            SetVehicleMod(vehicle, 30, props.modDial, false)
-        end
-        if props.modDoorSpeaker then
-            SetVehicleMod(vehicle, 31, props.modDoorSpeaker, false)
-        end
-        if props.modSeats then
-            SetVehicleMod(vehicle, 32, props.modSeats, false)
-        end
-        if props.modSteeringWheel then
-            SetVehicleMod(vehicle, 33, props.modSteeringWheel, false)
-        end
-        if props.modShifterLeavers then
-            SetVehicleMod(vehicle, 34, props.modShifterLeavers, false)
-        end
-        if props.modAPlate then
-            SetVehicleMod(vehicle, 35, props.modAPlate, false)
-        end
-        if props.modSpeakers then
-            SetVehicleMod(vehicle, 36, props.modSpeakers, false)
-        end
-        if props.modTrunk then
-            SetVehicleMod(vehicle, 37, props.modTrunk, false)
-        end
-        if props.modHydrolic then
-            SetVehicleMod(vehicle, 38, props.modHydrolic, false)
-        end
-        if props.modEngineBlock then
-            SetVehicleMod(vehicle, 39, props.modEngineBlock, false)
-        end
-        if props.modAirFilter then
-            SetVehicleMod(vehicle, 40, props.modAirFilter, false)
-        end
-        if props.modStruts then
-            SetVehicleMod(vehicle, 41, props.modStruts, false)
-        end
-        if props.modArchCover then
-            SetVehicleMod(vehicle, 42, props.modArchCover, false)
-        end
-        if props.modAerials then
-            SetVehicleMod(vehicle, 43, props.modAerials, false)
-        end
-        if props.modTrimB then
-            SetVehicleMod(vehicle, 44, props.modTrimB, false)
-        end
-        if props.modTank then
-            SetVehicleMod(vehicle, 45, props.modTank, false)
-        end
-        if props.modWindows then
-            SetVehicleMod(vehicle, 46, props.modWindows, false)
-        end
-        if props.modKit47 then
-            SetVehicleMod(vehicle, 47, props.modKit47, false)
-        end
-        if props.modLivery then
-            SetVehicleMod(vehicle, 48, props.modLivery, false)
-            SetVehicleLivery(vehicle, props.modLivery)
-        end
-        if props.modKit49 then
-            SetVehicleMod(vehicle, 49, props.modKit49, false)
-        end
-        if props.liveryRoof then
-            SetVehicleRoofLivery(vehicle, props.liveryRoof)
         end
     end
 end
@@ -864,134 +501,117 @@ function RSGCore.Functions.DrawText3D(x, y, z, text)
     ClearDrawOrigin()
 end
 
-function RSGCore.Functions.RequestAnimDict(animDict)
-    if HasAnimDictLoaded(animDict) then return end
-    RequestAnimDict(animDict)
-    while not HasAnimDictLoaded(animDict) do
-        Wait(0)
-    end
-end
+---@deprecated use lib.requestAnimDict from ox_lib
+RSGCore.Functions.RequestAnimDict = lib.requestAnimDict
 
+---@deprecated use the GetWorldPositionOfEntityBone native and calculate distance directly
 function RSGCore.Functions.GetClosestBone(entity, list)
-    local playerCoords, bone, coords, distance = GetEntityCoords(PlayerPedId())
+    local playerCoords = GetEntityCoords(cache.ped)
+
+    ---@type integer | {id: integer} | {id: integer, type: string, name: string}, vector3, number
+    local bone, coords, distance
     for _, element in pairs(list) do
         local boneCoords = GetWorldPositionOfEntityBone(entity, element.id or element)
         local boneDistance = #(playerCoords - boneCoords)
-        if not coords then
-            bone, coords, distance = element, boneCoords, boneDistance
-        elseif distance > boneDistance then
-            bone, coords, distance = element, boneCoords, boneDistance
+        if not coords or distance > boneDistance then
+            bone = element
+            coords = boneCoords
+            distance = boneDistance
         end
     end
     if not bone then
-        bone = { id = GetEntityBoneIndexByName(entity, 'bodyshell'), type = 'remains', name = 'bodyshell' }
+        bone = {id = GetEntityBoneIndexByName(entity, 'bodyshell'), type = 'remains', name = 'bodyshell'}
         coords = GetWorldPositionOfEntityBone(entity, bone.id)
         distance = #(coords - playerCoords)
     end
     return bone, coords, distance
 end
 
+---@deprecated use the GetWorldPositionOfEntityBone native and calculate distance directly
 function RSGCore.Functions.GetBoneDistance(entity, boneType, boneIndex)
-    local bone
-    if boneType == 1 then
-        bone = GetPedBoneIndex(entity, boneIndex)
-    else
-        bone = GetEntityBoneIndexByName(entity, boneIndex)
-    end
-    local boneCoords = GetWorldPositionOfEntityBone(entity, bone)
-    local playerCoords = GetEntityCoords(PlayerPedId())
-    return #(boneCoords - playerCoords)
+    local boneIndex = boneType == 1 and GetPedBoneIndex(entity, bone --[[@as integer]]) or GetEntityBoneIndexByName(entity, bone --[[@as string]])
+    local boneCoords = GetWorldPositionOfEntityBone(entity, boneIndex)
+    local playerCoords = GetEntityCoords(cache.ped)
+    return #(playerCoords - boneCoords)
 end
 
+---@deprecated use the AttachEntityToEntity native directly
 function RSGCore.Functions.AttachProp(ped, model, boneId, x, y, z, xR, yR, zR, vertex)
     local modelHash = type(model) == 'string' and joaat(model) or model
     local bone = GetPedBoneIndex(ped, boneId)
-    RSGCore.Functions.LoadModel(modelHash)
-    local prop = CreateObject(modelHash, 1.0, 1.0, 1.0, 1, 1, 0)
-    AttachEntityToEntity(prop, ped, bone, x, y, z, xR, yR, zR, 1, 1, 0, 1, not vertex and 2 or 0, 1)
+    lib.requestModel(modelHash)
+    local prop = CreateObject(modelHash, 1.0, 1.0, 1.0, true, true, false)
+    AttachEntityToEntity(prop, ped, bone, x, y, z, xR, yR, zR, true, true, false, true, not vertex and 2 or 0, true)
     SetModelAsNoLongerNeeded(modelHash)
     return prop
 end
 
+---@deprecated use lib.getNearbyVehicles from ox_lib
 function RSGCore.Functions.SpawnClear(coords, radius)
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(PlayerPedId())
-    end
+    coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords or GetEntityCoords(cache.ped)
+    radius = radius or 5
     local vehicles = GetGamePool('CVehicle')
     local closeVeh = {}
-    for i = 1, #vehicles, 1 do
+    for i = 1, #vehicles do
         local vehicleCoords = GetEntityCoords(vehicles[i])
         local distance = #(vehicleCoords - coords)
         if distance <= radius then
             closeVeh[#closeVeh + 1] = vehicles[i]
         end
     end
-    if #closeVeh > 0 then return false end
-    return true
+    return #closeVeh == 0
 end
 
-function RSGCore.Functions.LoadAnimSet(animSet)
-    if HasAnimSetLoaded(animSet) then return end
-    RequestAnimSet(animSet)
-    while not HasAnimSetLoaded(animSet) do
-        Wait(0)
-    end
-end
+---@deprecated use lib.requestAnimSet from ox_lib
+RSGCore.Functions.LoadAnimSet = lib.requestAnimSet
 
-function RSGCore.Functions.LoadParticleDictionary(dictionary)
-    if HasNamedPtfxAssetLoaded(dictionary) then return end
-    RequestNamedPtfxAsset(dictionary)
-    while not HasNamedPtfxAssetLoaded(dictionary) do
-        Wait(0)
-    end
-end
+---@deprecated use lib.requestNamedPtfxAsset from ox_lib
+RSGCore.Functions.LoadParticleDictionary = lib.requestNamedPtfxAsset
 
+---@deprecated use ParticleFx natives directly
 function RSGCore.Functions.StartParticleAtCoord(dict, ptName, looped, coords, rot, scale, alpha, color, duration)
-    if coords then
-        coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords
-    else
-        coords = GetEntityCoords(PlayerPedId())
-    end
-    RSGCore.Functions.LoadParticleDictionary(dict)
+    coords = type(coords) == 'table' and vec3(coords.x, coords.y, coords.z) or coords or GetEntityCoords(cache.ped)
+
+    lib.requestNamedPtfxAsset(dict)
     UseParticleFxAssetNextCall(dict)
     SetPtfxAssetNextCall(dict)
     local particleHandle
     if looped then
-        particleHandle = StartParticleFxLoopedAtCoord(ptName, coords.x, coords.y, coords.z, rot.x, rot.y, rot.z, scale or 1.0)
+        particleHandle = StartParticleFxLoopedAtCoord(ptName, coords.x, coords.y, coords.z, rot.x, rot.y, rot.z, scale or 1.0, false, false, false, false)
         if color then
             SetParticleFxLoopedColour(particleHandle, color.r, color.g, color.b, false)
         end
         SetParticleFxLoopedAlpha(particleHandle, alpha or 10.0)
         if duration then
             Wait(duration)
-            StopParticleFxLooped(particleHandle, 0)
+            StopParticleFxLooped(particleHandle, false)
         end
     else
-        SetParticleFxNonLoopedAlpha(alpha or 10.0)
+        SetParticleFxNonLoopedAlpha(alpha or 1.0)
         if color then
             SetParticleFxNonLoopedColour(color.r, color.g, color.b)
         end
-        StartParticleFxNonLoopedAtCoord(ptName, coords.x, coords.y, coords.z, rot.x, rot.y, rot.z, scale or 1.0)
+        StartParticleFxNonLoopedAtCoord(ptName, coords.x, coords.y, coords.z, rot.x, rot.y, rot.z, scale or 1.0, false, false, false)
     end
     return particleHandle
 end
 
+---@deprecated use ParticleFx natives directly
 function RSGCore.Functions.StartParticleOnEntity(dict, ptName, looped, entity, bone, offset, rot, scale, alpha, color, evolution, duration)
-    RSGCore.Functions.LoadParticleDictionary(dict)
+    lib.requestNamedPtfxAsset(dict)
     UseParticleFxAssetNextCall(dict)
-    local particleHandle, boneID
-    if bone and GetEntityType(entity) == 1 then
-        boneID = GetPedBoneIndex(entity, bone)
-    elseif bone then
-        boneID = GetEntityBoneIndexByName(entity, bone)
-    end
+    local particleHandle = nil
+    ---@cast bone number
+    local pedBoneIndex = bone and GetPedBoneIndex(entity, bone) or 0
+    ---@cast bone string
+    local nameBoneIndex = bone and GetEntityBoneIndexByName(entity, bone) or 0
+    local entityType = GetEntityType(entity)
+    local boneID = entityType == 1 and (pedBoneIndex ~= 0 and pedBoneIndex) or (looped and nameBoneIndex ~= 0 and nameBoneIndex)
     if looped then
-        if bone then
-            particleHandle = StartParticleFxLoopedOnEntityBone(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, boneID, scale)
+        if boneID then
+            particleHandle = StartParticleFxLoopedOnEntityBone(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, boneID, scale or 1.0, false, false, false)
         else
-            particleHandle = StartParticleFxLoopedOnEntity(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, scale)
+            particleHandle = StartParticleFxLoopedOnEntity(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, scale or 1.0, false, false, false)
         end
         if evolution then
             SetParticleFxLoopedEvolution(particleHandle, evolution.name, evolution.amount, false)
@@ -999,20 +619,20 @@ function RSGCore.Functions.StartParticleOnEntity(dict, ptName, looped, entity, b
         if color then
             SetParticleFxLoopedColour(particleHandle, color.r, color.g, color.b, false)
         end
-        SetParticleFxLoopedAlpha(particleHandle, alpha)
+        SetParticleFxLoopedAlpha(particleHandle, alpha or 1.0)
         if duration then
             Wait(duration)
-            StopParticleFxLooped(particleHandle, 0)
+            StopParticleFxLooped(particleHandle, false)
         end
     else
-        SetParticleFxNonLoopedAlpha(alpha or 10.0)
+        SetParticleFxNonLoopedAlpha(alpha or 1.0)
         if color then
             SetParticleFxNonLoopedColour(color.r, color.g, color.b)
         end
-        if bone then
-            StartParticleFxNonLoopedOnPedBone(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, boneID, scale)
+        if boneID then
+            StartParticleFxNonLoopedOnPedBone(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, boneID, scale or 1.0, false, false, false)
         else
-            StartParticleFxNonLoopedOnEntity(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, scale)
+            StartParticleFxNonLoopedOnEntity(ptName, entity, offset.x, offset.y, offset.z, rot.x, rot.y, rot.z, scale or 1.0, false, false, false)
         end
     end
     return particleHandle
@@ -1028,7 +648,7 @@ function RSGCore.Functions.GetZoneAtCoords(coords)
 end
 
 function RSGCore.Functions.GetCardinalDirection(entity)
-    entity = DoesEntityExist(entity) and entity or PlayerPedId()
+    entity = DoesEntityExist(entity) and entity or cache.ped
     if DoesEntityExist(entity) then
         local heading = GetEntityHeading(entity)
         if ((heading >= 0 and heading < 45) or (heading >= 315 and heading < 360)) then
