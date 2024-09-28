@@ -5,18 +5,19 @@ RegisterNetEvent('RSGCore:Client:OnPlayerLoaded', function()
     ShutdownLoadingScreenNui()
     LocalPlayer.state:set('isLoggedIn', true, false)
     if not RSGConfig.Server.PVP then return end
-    SetCanAttackFriendly(PlayerPedId(), true, false)
-    NetworkSetFriendlyFireOption(true)
+    -- SetCanAttackFriendly(PlayerPedId(), true, false)
+    -- NetworkSetFriendlyFireOption(true)
 end)
 
 RegisterNetEvent('RSGCore:Client:OnPlayerUnload', function()
     LocalPlayer.state:set('isLoggedIn', false, false)
 end)
 
-RegisterNetEvent('RSGCore:Client:PvpHasToggled', function(pvp_state)
-    SetCanAttackFriendly(PlayerPedId(), pvp_state, false)
-    NetworkSetFriendlyFireOption(pvp_state)
-end)
+-- RegisterNetEvent('RSGCore:Client:PvpHasToggled', function(pvp_state)
+--     SetCanAttackFriendly(PlayerPedId(), pvp_state, false)
+--    NetworkSetFriendlyFireOption(pvp_state)
+-- end)
+
 -- Teleport Commands
 
 RegisterNetEvent('RSGCore:Command:TeleportToPlayer', function(coords)
