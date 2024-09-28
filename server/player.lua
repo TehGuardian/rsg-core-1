@@ -268,7 +268,7 @@ function RSGCore.Player.CreatePlayer(PlayerData, Offline)
 
     function self.Functions.SetMetaData(meta, val)
         if not meta or type(meta) ~= 'string' then return end
-        if meta == 'hunger' or meta == 'thirst' then
+        if meta == 'hunger' or meta == 'thirst' or meta == 'cleanliness' then
             val = val > 100 and 100 or val
         end
         self.PlayerData.metadata[meta] = val
@@ -525,17 +525,22 @@ end
 
 local playertables = { -- Add tables as needed
     { table = 'players' },
-    { table = 'apartments' },
-    { table = 'bank_accounts' },
-    { table = 'crypto_transactions' },
-    { table = 'phone_invoices' },
-    { table = 'phone_messages' },
+    { table = "playeroutfit"},
     { table = 'playerskins' },
-    { table = 'player_contacts' },
-    { table = 'player_houses' },
-    { table = 'player_mails' },
-    { table = 'player_outfits' },
-    { table = 'player_vehicles' }
+    { table = "player_horses"},
+    { table = "player_weapons"},
+    { table = "address_book"},
+    { table = "telegrams"},
+    -- { table = 'player_contacts' },
+    -- { table = 'apartments' },
+    -- { table = 'bank_accounts' },
+    -- { table = 'crypto_transactions' },
+    -- { table = 'phone_invoices' },
+    -- { table = 'phone_messages' },
+    -- { table = 'player_houses' },
+    -- { table = 'player_mails' },
+    -- { table = 'player_outfits' },
+    -- { table = 'player_vehicles' }
 }
 
 function RSGCore.Player.DeleteCharacter(source, citizenid)
