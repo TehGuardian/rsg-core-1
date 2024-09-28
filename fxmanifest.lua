@@ -5,7 +5,7 @@ game 'rdr3'
 lua54 'yes'
 
 description 'rsg-core'
-version '1.2.6'
+version '2.0.0'
 
 shared_scripts {
     'config.lua',
